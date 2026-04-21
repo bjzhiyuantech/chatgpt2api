@@ -159,6 +159,19 @@ class SPAMiddleware:
 
         path = scope.get("path", "/")
 
+        # Fix URL-encoded full paths: http%3A//host%3Aport/real/path → /real/path
+        if path.startswith("/http%3A") or path.startswith("/https%3A"):
+            from urllib.parse import unquote
+            decoded = unquote(path)
+            # Extract the path portion from the full URL
+            # e.g. /http://host:3000/_next/static/chunks/xxx.js → /_next/static/chunks/xxx.js
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(decoded[1:])  # remove leading /
+                path = parsed.path or "/"
+            except Exception:
+                pass
+
         # Let API routes pass through to FastAPI
         if any(path.startswith(prefix) for prefix in self.API_PREFIXES):
             await self.app(scope, receive, send)
