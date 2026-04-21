@@ -18,6 +18,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install nginx
+RUN apt-get update && apt-get install -y --no-install-recommends nginx && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
@@ -27,7 +30,13 @@ COPY main.py ./
 COPY VERSION ./
 COPY services ./services
 COPY --from=web-build /app/web/out ./web_dist
+COPY nginx.conf /etc/nginx/sites-enabled/default
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+
+# Remove default nginx config that conflicts
+RUN rm -f /etc/nginx/sites-enabled/default.bak
 
 EXPOSE 80
 
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--workers", "4", "--access-log"]
+CMD ["./entrypoint.sh"]

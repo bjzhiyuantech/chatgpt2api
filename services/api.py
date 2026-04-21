@@ -7,8 +7,6 @@ from threading import Event, Thread
 from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from services.account_service import account_service
@@ -22,7 +20,6 @@ from services.version import get_app_version
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-WEB_DIST_DIR = BASE_DIR / "web_dist"
 
 
 class ImageGenerationRequest(BaseModel):
@@ -111,21 +108,6 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
     thread = Thread(target=worker, name="limited-account-watcher", daemon=True)
     thread.start()
     return thread
-
-
-class SPAStaticFiles(StaticFiles):
-    """StaticFiles subclass that falls back to index.html for SPA routing."""
-
-    async def get_response(self, path: str, scope) -> FileResponse:
-        try:
-            return await super().get_response(path, scope)
-        except Exception:
-            # For paths with file extensions (JS/CSS/etc), don't fallback — re-raise 404
-            last_segment = path.strip("/").split("/")[-1] if path.strip("/") else ""
-            if "." in last_segment and not last_segment.endswith(".html") and not last_segment.endswith(".txt"):
-                raise
-            # SPA fallback to index.html
-            return await super().get_response("index.html", scope)
 
 
 def create_app() -> FastAPI:
@@ -455,9 +437,5 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(router)
-
-    # Mount SPA static files — catches all non-API paths
-    if WEB_DIST_DIR.exists():
-        app.mount("/", SPAStaticFiles(directory=str(WEB_DIST_DIR), html=True), name="spa")
 
     return app
