@@ -224,7 +224,7 @@ def fetch_tokens_for_pool(pool: dict) -> list[str]:
             need_download.append(entry)
 
     if need_download:
-        max_workers = min(10, len(need_download))
+        max_workers = min(50, len(need_download))
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_map = {}
@@ -276,7 +276,7 @@ class CPAService:
         self._tokens: list[str] = []
         self._index = 0
         self._last_refresh: float = 0
-        self._cache_ttl = 300
+        self._cache_ttl = 1800  # 30 minutes
 
     @property
     def enabled(self) -> bool:
