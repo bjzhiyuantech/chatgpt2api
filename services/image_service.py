@@ -404,7 +404,9 @@ def _extract_image_ids(mapping: dict) -> list[str]:
 
 def _poll_image_ids(session: Session, access_token: str, device_id: str, conversation_id: str) -> list[str]:
     started = time.time()
-    while time.time() - started < 180:
+    timeout = 300  # 5 minutes for queued requests
+    print(f"[image-poll] polling conversation={conversation_id[:16]}... timeout={timeout}s")
+    while time.time() - started < timeout:
         response = _retry(
             lambda: session.get(
                 f"{BASE_URL}/backend-api/conversation/{conversation_id}",
@@ -626,9 +628,18 @@ def generate_image_result(
             actual_conversation_id = parsed.get("conversation_id") or ""
             file_ids = parsed.get("file_ids") or []
             response_text = str(parsed.get("text") or "").strip()
+
+            # If we got a conversation_id but no images yet, poll for them
+            # This handles queued requests ("正在处理图片...") where images arrive later
             if actual_conversation_id and not file_ids:
+                print(
+                    f"[image-upstream] no images in SSE stream, polling conversation={actual_conversation_id[:16]}..."
+                    f" response_text={response_text[:100]!r}"
+                )
                 file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)
+
             if not file_ids:
+                # Only raise the text as error if we truly have no conversation to poll
                 if response_text:
                     raise ImageGenerationError(response_text)
                 raise ImageGenerationError("no image returned from upstream")
