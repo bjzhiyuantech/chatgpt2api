@@ -535,9 +535,13 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
     if not response.ok:
         raise ImageGenerationError(f"file upload confirm failed: HTTP {response.status_code} {response.text[:200]}")
     confirm_data = response.json() if response.text.strip() else {}
-    print(f"[image-upload] confirm response: {json.dumps(confirm_data)[:500]}")
+    confirm_status = confirm_data.get("status") or ""
+    if confirm_status == "success":
+        print(f"[image-upload] file {file_id} ready (confirmed immediately)")
+        return file_id
 
-    # Step 4: Poll until file is ready
+    # Step 4: Poll until file is ready (fallback — field is "state" not "status")
+    print(f"[image-upload] polling status for file {file_id}...")
     for poll_attempt in range(30):
         response = session.get(
             BASE_URL + f"/backend-api/files/{file_id}",
@@ -549,17 +553,12 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
         )
         if response.ok:
             file_status = response.json()
-            status = file_status.get("status")
-            print(f"[image-upload] poll {poll_attempt}: file={file_id} status={status} keys={list(file_status.keys())}")
-            if poll_attempt == 0:
-                print(f"[image-upload] poll full response: {json.dumps(file_status)[:500]}")
-            if status == "success":
-                print(f"[image-upload] file {file_id} ready")
+            state = file_status.get("state") or file_status.get("status") or ""
+            if state in ("ready", "success"):
+                print(f"[image-upload] file {file_id} ready (state={state})")
                 return file_id
-            if status in ("error", "failed"):
-                raise ImageGenerationError(f"file processing failed: {status} {response.text[:200]}")
-        else:
-            print(f"[image-upload] poll {poll_attempt}: file={file_id} HTTP {response.status_code} {response.text[:200]}")
+            if state in ("error", "failed"):
+                raise ImageGenerationError(f"file processing failed: {state}")
         time.sleep(1)
 
     raise ImageGenerationError("file upload timed out waiting for processing")
