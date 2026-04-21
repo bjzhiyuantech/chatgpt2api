@@ -11,7 +11,14 @@ const request = axios.create({
     baseURL: webConfig.apiUrl.replace(/\/$/, ""),
 });
 
+// Track whether a 401 redirect is already in progress to prevent multiple redirects
+let isRedirecting = false;
+
 request.interceptors.request.use(async (config) => {
+    // Block all requests if we're already redirecting to login
+    if (isRedirecting) {
+        return Promise.reject(new axios.Cancel("redirecting to login"));
+    }
     const nextConfig = {...config};
     const authKey = await getStoredAuthKey();
     const headers = {...(nextConfig.headers || {})} as Record<string, string>;
@@ -27,17 +34,23 @@ request.interceptors.request.use(async (config) => {
 request.interceptors.response.use(
     (response) => response,
     async (error: AxiosError<{ detail?: { error?: string }; error?: string; message?: string }>) => {
+        // Silently swallow cancelled requests during redirect
+        if (axios.isCancel(error)) {
+            return new Promise(() => {});
+        }
+
         const status = error.response?.status;
         const shouldRedirect = (error.config as RequestConfig | undefined)?.redirectOnUnauthorized !== false;
+
         if (status === 401 && shouldRedirect && typeof window !== "undefined") {
-            // Avoid redirect loop — only redirect if not already on /login
-            if (!window.location.pathname.startsWith("/login")) {
-                await clearStoredAuthKey();
+            if (!isRedirecting && !window.location.pathname.startsWith("/login")) {
+                isRedirecting = true;
+                // Fire-and-forget — don't await to avoid race conditions
+                clearStoredAuthKey().catch(() => {});
                 window.location.replace("/login");
-                // Return a never-resolving promise to prevent further error handling
-                // while the browser navigates away
-                return new Promise(() => {});
             }
+            // Always return a pending promise for 401 — never let it reach catch handlers
+            return new Promise(() => {});
         }
 
         const payload = error.response?.data;
