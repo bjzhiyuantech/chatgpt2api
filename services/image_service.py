@@ -507,7 +507,7 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
                 "x-ms-blob-type": "BlockBlob",
                 "x-ms-version": "2020-04-08",
             },
-            content=image_data,
+            data=image_data,
             timeout=60,
         ),
         retries=3,
