@@ -102,8 +102,16 @@ export async function updateAccount(
   });
 }
 
+export type ImageGenerationResponse = {
+  created: number;
+  data?: Array<{ b64_json: string; revised_prompt?: string }>;
+  task_id?: string;
+  status?: string;
+  message?: string;
+};
+
 export async function generateImage(prompt: string, model: ImageModel = "gpt-image-1") {
-  return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
+  return httpRequest<ImageGenerationResponse>(
     "/v1/images/generations",
     {
       method: "POST",
@@ -125,13 +133,28 @@ export async function editImage(prompt: string, imageFile: File, model: ImageMod
   formData.append("n", "1");
   formData.append("response_format", "b64_json");
 
-  return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
+  return httpRequest<ImageGenerationResponse>(
     "/v1/images/edits",
     {
       method: "POST",
       body: formData,
     },
   );
+}
+
+export type ImageTaskResponse = {
+  task_id: string;
+  status: string;
+  prompt: string;
+  model: string;
+  created_at: number;
+  updated_at: number;
+  result?: { created: number; data: Array<{ b64_json: string; revised_prompt?: string }> };
+  error?: string;
+};
+
+export async function fetchImageTask(taskId: string) {
+  return httpRequest<ImageTaskResponse>(`/v1/images/tasks/${taskId}`);
 }
 
 // ── CPA (CLIProxyAPI) ──────────────────────────────────────────────

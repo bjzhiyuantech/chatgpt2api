@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchAccounts, generateImage, editImage, type Account, type ImageModel } from "@/lib/api";
+import { fetchAccounts, generateImage, editImage, fetchImageTask, type Account, type ImageModel } from "@/lib/api";
 import {
   clearImageConversations,
   deleteImageConversation,
@@ -323,9 +323,35 @@ export default function ImagePage() {
 
       const tasks = Array.from({ length: parsedCount }, async (_, index) => {
         try {
-          const data = currentRefImage
+          let data = currentRefImage
             ? await editImage(prompt, currentRefImage, imageModel)
             : await generateImage(prompt, imageModel);
+
+          // Handle async task — poll until completed
+          if (data.task_id && !data.data?.length) {
+            const taskId = data.task_id;
+            toast.info("图片已加入排队，正在等待生成...");
+            const maxPollTime = 600_000; // 10 minutes
+            const pollInterval = 5_000; // 5 seconds
+            const startTime = Date.now();
+
+            while (Date.now() - startTime < maxPollTime) {
+              await new Promise((resolve) => setTimeout(resolve, pollInterval));
+              const taskResult = await fetchImageTask(taskId);
+              if (taskResult.status === "completed" && taskResult.result) {
+                data = taskResult.result;
+                break;
+              }
+              if (taskResult.status === "failed") {
+                throw new Error(taskResult.error || "图片生成失败");
+              }
+            }
+
+            if (!data.data?.length) {
+              throw new Error("图片生成超时，请稍后在任务列表中查看");
+            }
+          }
+
           const first = data.data?.[0];
           if (!first?.b64_json) {
             throw new Error(`第 ${index + 1} 张没有返回图片数据`);

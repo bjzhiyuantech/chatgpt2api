@@ -15,6 +15,7 @@ from services.config import config
 from services.backend_service import BackendService
 from services.cpa_service import cpa_service, cpa_config, fetch_tokens_for_pool, fetch_pool_status
 from services.image_service import ImageGenerationError
+from services.task_service import task_service
 from services.version import get_app_version
 
 
@@ -296,6 +297,52 @@ def create_app() -> FastAPI:
             )
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
+    # ── Task query endpoints ────────────────────────────────────────
+
+    @router.get("/v1/images/tasks/{task_id}")
+    async def get_image_task(
+            task_id: str,
+            authorization: str | None = Header(default=None),
+    ):
+        require_auth_key(authorization)
+        task = task_service.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail={"error": "task not found"})
+        response: dict = {
+            "task_id": task.id,
+            "status": task.status,
+            "prompt": task.prompt,
+            "model": task.model,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }
+        if task.status == "completed" and task.result:
+            response["result"] = task.result
+        if task.status == "failed" and task.error:
+            response["error"] = task.error
+        return response
+
+    @router.get("/v1/images/tasks")
+    async def list_image_tasks(
+            authorization: str | None = Header(default=None),
+    ):
+        require_auth_key(authorization)
+        tasks = task_service.list_tasks()
+        return {
+            "tasks": [
+                {
+                    "task_id": t.id,
+                    "status": t.status,
+                    "prompt": t.prompt,
+                    "model": t.model,
+                    "created_at": t.created_at,
+                    "updated_at": t.updated_at,
+                    "error": t.error if t.status == "failed" else None,
+                }
+                for t in tasks
+            ]
+        }
 
     # ── CPA multi-pool endpoints ────────────────────────────────────
 

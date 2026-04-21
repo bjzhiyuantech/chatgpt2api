@@ -49,6 +49,18 @@ _WIN_KEYS = [
 ]
 
 
+class ImageQueuedError(Exception):
+    """Raised when ChatGPT queues the image generation instead of returning immediately."""
+
+    def __init__(self, conversation_id: str, access_token: str, device_id: str, session: Session, fp: dict, message: str = ""):
+        self.conversation_id = conversation_id
+        self.access_token = access_token
+        self.device_id = device_id
+        self.session = session
+        self.fp = fp
+        super().__init__(message or "image generation queued")
+
+
 class ImageGenerationError(Exception):
     pass
 
@@ -402,9 +414,8 @@ def _extract_image_ids(mapping: dict) -> list[str]:
     return file_ids
 
 
-def _poll_image_ids(session: Session, access_token: str, device_id: str, conversation_id: str) -> list[str]:
+def _poll_image_ids(session: Session, access_token: str, device_id: str, conversation_id: str, timeout: int = 180) -> list[str]:
     started = time.time()
-    timeout = 300  # 5 minutes for queued requests
     print(f"[image-poll] polling conversation={conversation_id[:16]}... timeout={timeout}s")
     while time.time() - started < timeout:
         response = _retry(
@@ -636,10 +647,19 @@ def generate_image_result(
                     f"[image-upstream] no images in SSE stream, polling conversation={actual_conversation_id[:16]}..."
                     f" response_text={response_text[:100]!r}"
                 )
-                file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)
+                file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id, timeout=180)
 
             if not file_ids:
-                # Only raise the text as error if we truly have no conversation to poll
+                # If we have a conversation_id, the image might still be generating — raise queued error
+                if actual_conversation_id:
+                    raise ImageQueuedError(
+                        conversation_id=actual_conversation_id,
+                        access_token=access_token,
+                        device_id=device_id,
+                        session=session,
+                        fp=fp,
+                        message=response_text or "image generation queued",
+                    )
                 if response_text:
                     raise ImageGenerationError(response_text)
                 raise ImageGenerationError("no image returned from upstream")
@@ -659,8 +679,43 @@ def generate_image_result(
             "created": time.time_ns() // 1_000_000_000,
             "data": [{"b64_json": item.b64_json, "revised_prompt": item.revised_prompt} for item in results],
         }
+    except ImageQueuedError:
+        # Don't close session — caller handles it
+        raise
     except Exception as exc:
         print(f"[image-upstream] fail token={access_token[:12]}... error={exc}")
+        session.close()
         raise
+
+
+def poll_queued_image(
+    conversation_id: str,
+    access_token: str,
+    device_id: str,
+    prompt: str,
+    timeout: int = 600,
+) -> dict:
+    """Continue polling a queued conversation until images are ready.
+
+    Used by the background task service after the initial 180s timeout.
+    """
+    session, fp = _new_session(access_token)
+    try:
+        print(f"[image-poll-async] start conversation={conversation_id[:16]}... timeout={timeout}s")
+        file_ids = _poll_image_ids(session, access_token, device_id, conversation_id, timeout=timeout)
+        if not file_ids:
+            raise ImageGenerationError("image generation timed out after extended polling")
+
+        first_file_id = str(file_ids[0])
+        download_url = _fetch_download_url(session, access_token, device_id, conversation_id, first_file_id)
+        if not download_url:
+            raise ImageGenerationError("failed to get download url")
+
+        b64 = _download_as_base64(session, download_url)
+        print(f"[image-poll-async] success conversation={conversation_id[:16]}...")
+        return {
+            "created": time.time_ns() // 1_000_000_000,
+            "data": [{"b64_json": b64, "revised_prompt": prompt}],
+        }
     finally:
         session.close()
