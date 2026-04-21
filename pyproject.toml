@@ -8,5 +8,6 @@ dependencies = [
     "curl-cffi>=0.15.0",
     "fastapi>=0.136.0",
     "pybase64>=1.4.3",
+    "python-multipart>=0.0.20",
     "uvicorn>=0.44.0",
 ]
