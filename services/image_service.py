@@ -221,6 +221,7 @@ def _send_conversation(
     parent_message_id: str,
     prompt: str,
     model: str,
+    image_file_ids: Optional[list[str]] = None,
 ):
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -237,6 +238,31 @@ def _send_conversation(
     }
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
+
+    # Build message content — text only or multipart (text + images)
+    if image_file_ids:
+        parts: list = [prompt]
+        for file_id in image_file_ids:
+            parts.append({
+                "asset_pointer": f"file-service://{file_id}",
+                "size_bytes": 0,
+                "width": 0,
+                "height": 0,
+            })
+        content = {"content_type": "multipart_image", "parts": parts}
+        attachments = [
+            {
+                "id": file_id,
+                "name": f"image_{i}.png",
+                "size": 0,
+                "mimeType": "image/png",
+            }
+            for i, file_id in enumerate(image_file_ids)
+        ]
+    else:
+        content = {"content_type": "text", "parts": [prompt]}
+        attachments = []
+
     response = _retry(
         lambda: session.post(
             BASE_URL + "/backend-api/conversation",
@@ -247,9 +273,9 @@ def _send_conversation(
                     {
                         "id": str(uuid.uuid4()),
                         "author": {"role": "user"},
-                        "content": {"content_type": "text", "parts": [prompt]},
+                        "content": content,
                         "metadata": {
-                            "attachments": [],
+                            "attachments": attachments,
                         },
                     }
                 ],
@@ -443,7 +469,98 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
     return str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
-def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL, n: int = 1) -> dict:
+def _upload_image(session: Session, access_token: str, device_id: str, image_data: bytes, filename: str = "image.png", mime_type: str = "image/png") -> str:
+    """Upload an image to ChatGPT backend-api and return the file_id."""
+    # Step 1: Create upload
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + "/backend-api/files",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={
+                "file_name": filename,
+                "file_size": len(image_data),
+                "use_case": "multimodal",
+            },
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise ImageGenerationError(f"file create failed: HTTP {response.status_code} {response.text[:200]}")
+
+    file_info = response.json()
+    file_id = file_info.get("file_id") or ""
+    upload_url = file_info.get("upload_url") or ""
+    if not file_id or not upload_url:
+        raise ImageGenerationError("file create returned no file_id or upload_url")
+
+    # Step 2: Upload the actual file content
+    response = _retry(
+        lambda: session.put(
+            upload_url,
+            headers={
+                "Content-Type": mime_type,
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-version": "2020-04-08",
+            },
+            content=image_data,
+            timeout=60,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise ImageGenerationError(f"file upload failed: HTTP {response.status_code}")
+
+    # Step 3: Mark upload as complete
+    response = _retry(
+        lambda: session.post(
+            BASE_URL + f"/backend-api/files/{file_id}/uploaded",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+                "content-type": "application/json",
+            },
+            json={},
+            timeout=30,
+        ),
+        retries=3,
+    )
+    if not response.ok:
+        raise ImageGenerationError(f"file upload confirm failed: HTTP {response.status_code}")
+
+    # Step 4: Poll until file is ready
+    for _ in range(30):
+        response = session.get(
+            BASE_URL + f"/backend-api/files/{file_id}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "oai-device-id": device_id,
+            },
+            timeout=15,
+        )
+        if response.ok:
+            status = response.json().get("status")
+            if status == "success":
+                print(f"[image-upload] file {file_id} ready")
+                return file_id
+            if status in ("error", "failed"):
+                raise ImageGenerationError(f"file processing failed: {status}")
+        time.sleep(1)
+
+    raise ImageGenerationError("file upload timed out waiting for processing")
+
+
+def generate_image_result(
+    access_token: str,
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    n: int = 1,
+    image_data: bytes | None = None,
+) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
     if not prompt:
@@ -456,9 +573,10 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
     session, fp = _new_session(access_token)
     try:
         upstream_model = _resolve_upstream_model(access_token, model)
+        has_image = image_data is not None and len(image_data) > 0
         print(
             f"[image-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model} n={n}"
+            f"requested_model={model} upstream_model={upstream_model} n={n} has_ref_image={has_image}"
         )
         results: list[GeneratedImage] = []
         for _ in range(n):
@@ -472,6 +590,13 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
                     user_agent=USER_AGENT,
                     proof_config=_pow_config(USER_AGENT),
                 )
+
+            # Upload reference image if provided
+            image_file_ids = None
+            if has_image:
+                file_id = _upload_image(session, access_token, device_id, image_data)
+                image_file_ids = [file_id]
+
             parent_message_id = str(uuid.uuid4())
             response = _send_conversation(
                 session,
@@ -482,6 +607,7 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
                 parent_message_id,
                 prompt,
                 upstream_model,
+                image_file_ids=image_file_ids,
             )
             parsed = _parse_sse(response)
             actual_conversation_id = parsed.get("conversation_id") or ""

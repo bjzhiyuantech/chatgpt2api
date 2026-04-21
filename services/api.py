@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event, Thread
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException
+from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -261,6 +261,38 @@ def create_app() -> FastAPI:
                 body.prompt,
                 body.model,
                 body.n,
+            )
+        except ImageGenerationError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
+    @router.post("/v1/images/edits")
+    async def edit_images(
+            image: UploadFile = File(...),
+            prompt: str = Form(...),
+            model: str = Form(default="gpt-image-1"),
+            n: int = Form(default=1),
+            response_format: str = Form(default="b64_json"),
+            authorization: str | None = Header(default=None),
+    ):
+        require_auth_key(authorization)
+        if not prompt.strip():
+            raise HTTPException(status_code=400, detail={"error": "prompt is required"})
+        if n < 1 or n > 4:
+            raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+
+        image_data = await image.read()
+        if not image_data:
+            raise HTTPException(status_code=400, detail={"error": "image file is empty"})
+        if len(image_data) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail={"error": "image file too large (max 20MB)"})
+
+        try:
+            return await run_in_threadpool(
+                service.generate_with_pool,
+                prompt.strip(),
+                model,
+                n,
+                image_data,
             )
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc

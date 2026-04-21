@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, LoaderCircle, MessageSquarePlus, Trash2 } from "lucide-react";
+import { ArrowUp, ImagePlus, LoaderCircle, MessageSquarePlus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchAccounts, generateImage, type Account, type ImageModel } from "@/lib/api";
+import { fetchAccounts, generateImage, editImage, type Account, type ImageModel } from "@/lib/api";
 import {
   clearImageConversations,
   deleteImageConversation,
@@ -98,8 +98,11 @@ export default function ImagePage() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [availableQuota, setAvailableQuota] = useState("加载中");
+  const [referenceImage, setReferenceImage] = useState<File | null>(null);
+  const [referencePreview, setReferencePreview] = useState<string | null>(null);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const selectedConversation = useMemo(
@@ -201,9 +204,38 @@ export default function ImagePage() {
     }
   };
 
+  const clearReferenceImage = () => {
+    setReferenceImage(null);
+    if (referencePreview) {
+      URL.revokeObjectURL(referencePreview);
+      setReferencePreview(null);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleFileSelect = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("请选择图片文件");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("图片不能超过 20MB");
+      return;
+    }
+    if (referencePreview) {
+      URL.revokeObjectURL(referencePreview);
+    }
+    setReferenceImage(file);
+    setReferencePreview(URL.createObjectURL(file));
+  };
+
   const handleCreateDraft = () => {
     setSelectedConversationId(null);
     setImagePrompt("");
+    clearReferenceImage();
     textareaRef.current?.focus();
   };
 
@@ -264,12 +296,18 @@ export default function ImagePage() {
     setSelectedConversationId(conversationId);
     setImagePrompt("");
 
+    // Capture reference image before clearing
+    const currentRefImage = referenceImage;
+    clearReferenceImage();
+
     try {
       await persistConversation(draftConversation);
 
       const tasks = Array.from({ length: parsedCount }, async (_, index) => {
         try {
-          const data = await generateImage(prompt, imageModel);
+          const data = currentRefImage
+            ? await editImage(prompt, currentRefImage, imageModel)
+            : await generateImage(prompt, imageModel);
           const first = data.data?.[0];
           if (!first?.b64_json) {
             throw new Error(`第 ${index + 1} 张没有返回图片数据`);
@@ -518,11 +556,35 @@ export default function ImagePage() {
                   textareaRef.current?.focus();
                 }}
               >
+                {/* Reference image preview */}
+                {referencePreview && (
+                  <div className="flex items-center gap-2 px-6 pt-4 pb-0">
+                    <div className="group relative inline-block">
+                      <img
+                        src={referencePreview}
+                        alt="参考图"
+                        className="h-16 w-16 rounded-xl border border-stone-200 object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          clearReferenceImage();
+                        }}
+                        className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-stone-800 text-white opacity-0 transition group-hover:opacity-100"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                    <span className="text-xs text-stone-400">参考图已添加</span>
+                  </div>
+                )}
+
                 <Textarea
                   ref={textareaRef}
                   value={imagePrompt}
                   onChange={(event) => setImagePrompt(event.target.value)}
-                  placeholder="输入你想要生成的画面"
+                  placeholder={referenceImage ? "描述你想要的修改..." : "输入你想要生成的画面"}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -531,11 +593,41 @@ export default function ImagePage() {
                       }
                     }
                   }}
-                  className="min-h-[148px] resize-none rounded-[32px] border-0 bg-transparent px-6 pt-6 pb-20 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0"
+                  className={cn(
+                    "resize-none rounded-[32px] border-0 bg-transparent px-6 pb-20 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0",
+                    referencePreview ? "min-h-[100px] pt-3" : "min-h-[148px] pt-6",
+                  )}
+                />
+
+                {/* Hidden file input */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleFileSelect(e.target.files?.[0] ?? null);
+                  }}
                 />
 
                 <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-4 pt-10 sm:px-6">
                   <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fileInputRef.current?.click();
+                      }}
+                      className={cn(
+                        "inline-flex size-10 items-center justify-center rounded-full border transition",
+                        referenceImage
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-600"
+                          : "border-stone-200 bg-white text-stone-500 hover:bg-stone-50 hover:text-stone-700",
+                      )}
+                      title="上传参考图"
+                    >
+                      <ImagePlus className="size-4" />
+                    </button>
                     <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">
                       剩余额度 {availableQuota}
                     </div>

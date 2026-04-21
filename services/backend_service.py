@@ -42,12 +42,12 @@ class BackendService:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
 
-    def generate_with_pool(self, prompt: str, model: str, n: int):
+    def generate_with_pool(self, prompt: str, model: str, n: int, image_data: bytes | None = None):
         if cpa_service.enabled:
-            return self._generate_with_cpa(prompt, model, n)
-        return self._generate_with_local_pool(prompt, model, n)
+            return self._generate_with_cpa(prompt, model, n, image_data)
+        return self._generate_with_local_pool(prompt, model, n, image_data)
 
-    def _generate_with_cpa(self, prompt: str, model: str, n: int):
+    def _generate_with_cpa(self, prompt: str, model: str, n: int, image_data: bytes | None = None):
         """Fetch token from CLIProxyAPI on-the-fly and generate images."""
         attempted_tokens: set[str] = set()
         max_attempts = 5
@@ -65,7 +65,7 @@ class BackendService:
             print(f"[image-generate] cpa token={request_token[:12]}... model={model} n={n}")
 
             try:
-                result = generate_image_result(request_token, prompt, model, n)
+                result = generate_image_result(request_token, prompt, model, n, image_data=image_data)
                 print(f"[image-generate] cpa success token={request_token[:12]}...")
                 return result
             except ImageGenerationError as exc:
@@ -80,7 +80,7 @@ class BackendService:
             detail={"error": "All CPA tokens exhausted or failed"},
         )
 
-    def _generate_with_local_pool(self, prompt: str, model: str, n: int):
+    def _generate_with_local_pool(self, prompt: str, model: str, n: int, image_data: bytes | None = None):
         """Original local account pool logic."""
         attempted_tokens: set[str] = set()
 
@@ -102,7 +102,7 @@ class BackendService:
 
             print(f"[image-generate] start pooled token={request_token[:12]}... model={model} n={n}")
             try:
-                result = generate_image_result(request_token, prompt, model, n)
+                result = generate_image_result(request_token, prompt, model, n, image_data=image_data)
                 account = self.account_service.mark_image_result(request_token, success=True)
                 print(
                     f"[image-generate] success pooled token={request_token[:12]}... "
