@@ -171,9 +171,12 @@ class SPAMiddleware:
             await response(scope, receive, send)
             return
 
-        # For _next/* assets that don't exist, return 404
+        # For _next/* assets or paths with file extensions that don't exist, return 404
+        # This prevents JS/CSS requests from getting HTML fallback (which causes SyntaxError)
         clean = path.strip("/")
-        if clean.startswith("_next") or clean.startswith("__next"):
+        has_extension = "." in clean.split("/")[-1] if "/" in clean or "." in clean else False
+        is_next_asset = "_next" in clean or "__next" in clean
+        if is_next_asset or has_extension:
             response = Response(content='{"detail":"Not Found"}', status_code=404, media_type="application/json")
             await response(scope, receive, send)
             return
