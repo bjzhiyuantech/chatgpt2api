@@ -7,10 +7,9 @@ from threading import Event, Thread
 from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from starlette.requests import Request
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from services.account_service import account_service
 from services.config import config
@@ -114,112 +113,19 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
     return thread
 
 
-def resolve_web_asset(requested_path: str) -> Path | None:
-    if not WEB_DIST_DIR.exists():
-        return None
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles subclass that falls back to index.html for SPA routing."""
 
-    # Decode URL-encoded paths and extract real path if it's a full URL
-    from urllib.parse import unquote, urlparse
-    decoded_path = unquote(requested_path)
-    if decoded_path.startswith("/http://") or decoded_path.startswith("/https://"):
+    async def get_response(self, path: str, scope) -> FileResponse:
         try:
-            parsed = urlparse(decoded_path[1:])
-            decoded_path = parsed.path or "/"
+            return await super().get_response(path, scope)
         except Exception:
-            pass
-
-    clean_path = decoded_path.strip("/")
-    if not clean_path:
-        candidates = [WEB_DIST_DIR / "index.html"]
-    else:
-        relative_path = Path(clean_path)
-        candidates = [
-            WEB_DIST_DIR / relative_path,
-            WEB_DIST_DIR / relative_path / "index.html",
-            WEB_DIST_DIR / f"{clean_path}.html",
-        ]
-
-    for candidate in candidates:
-        try:
-            candidate.resolve().relative_to(WEB_DIST_DIR.resolve())
-        except ValueError:
-            continue
-        if candidate.is_file():
-            return candidate
-
-    return None
-
-
-class SPAMiddleware:
-    """ASGI middleware that serves static files from web_dist.
-
-    Runs BEFORE FastAPI routing so it catches all non-API paths reliably.
-    For API paths (/v1/*, /api/*, /auth/*), it passes through to FastAPI.
-    """
-
-    API_PREFIXES = ("/v1/", "/api/", "/auth/", "/version", "/openapi.json", "/docs", "/redoc")
-
-    def __init__(self, app: ASGIApp):
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        path = scope.get("path", "/")
-
-        # Fix URL-encoded full paths: http%3A//host%3Aport/real/path → /real/path
-        if path.startswith("/http%3A") or path.startswith("/https%3A"):
-            from urllib.parse import unquote
-            decoded = unquote(path)
-            # Extract the path portion from the full URL
-            # e.g. /http://host:3000/_next/static/chunks/xxx.js → /_next/static/chunks/xxx.js
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(decoded[1:])  # remove leading /
-                path = parsed.path or "/"
-            except Exception:
-                pass
-
-        # Let API routes pass through to FastAPI
-        if any(path.startswith(prefix) for prefix in self.API_PREFIXES):
-            await self.app(scope, receive, send)
-            return
-
-        # Try to serve a static file
-        asset = resolve_web_asset(path)
-        if asset is not None:
-            response = FileResponse(asset)
-            # Cache static assets (_next/) aggressively, HTML/txt files never cache
-            asset_str = str(asset)
-            if "/_next/" in asset_str or "/_next\\" in asset_str:
-                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-            elif asset_str.endswith(".html") or asset_str.endswith(".txt"):
-                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            await response(scope, receive, send)
-            return
-
-        # For paths with file extensions that don't exist, return 404
-        # This prevents JS/CSS requests from getting HTML fallback (which causes SyntaxError)
-        clean = path.strip("/")
-        last_segment = clean.split("/")[-1] if clean else ""
-        has_extension = "." in last_segment and not last_segment.startswith(".")
-        if has_extension:
-            response = Response(content='{"detail":"Not Found"}', status_code=404, media_type="application/json")
-            await response(scope, receive, send)
-            return
-
-        # SPA fallback — serve index.html for all other paths
-        fallback = resolve_web_asset("")
-        if fallback is not None:
-            response = FileResponse(fallback)
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            await response(scope, receive, send)
-            return
-
-        # No web_dist at all — pass through to FastAPI
-        await self.app(scope, receive, send)
+            # For paths with file extensions (JS/CSS/etc), don't fallback — re-raise 404
+            last_segment = path.strip("/").split("/")[-1] if path.strip("/") else ""
+            if "." in last_segment and not last_segment.endswith(".html") and not last_segment.endswith(".txt"):
+                raise
+            # SPA fallback to index.html
+            return await super().get_response("index.html", scope)
 
 
 def create_app() -> FastAPI:
@@ -550,8 +456,8 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
 
-    # SPA middleware — must be added AFTER CORS middleware
-    # (middleware stack is LIFO, so this runs before CORS)
-    app.add_middleware(SPAMiddleware)
+    # Mount SPA static files — catches all non-API paths
+    if WEB_DIST_DIR.exists():
+        app.mount("/", SPAStaticFiles(directory=str(WEB_DIST_DIR), html=True), name="spa")
 
     return app
