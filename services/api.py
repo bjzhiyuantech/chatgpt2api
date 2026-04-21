@@ -7,8 +7,10 @@ from threading import Event, Thread
 from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from services.account_service import account_service
 from services.config import config
@@ -129,13 +131,62 @@ def resolve_web_asset(requested_path: str) -> Path | None:
 
     for candidate in candidates:
         try:
-            candidate.relative_to(WEB_DIST_DIR)
+            candidate.resolve().relative_to(WEB_DIST_DIR.resolve())
         except ValueError:
             continue
         if candidate.is_file():
             return candidate
 
     return None
+
+
+class SPAMiddleware:
+    """ASGI middleware that serves static files from web_dist.
+
+    Runs BEFORE FastAPI routing so it catches all non-API paths reliably.
+    For API paths (/v1/*, /api/*, /auth/*), it passes through to FastAPI.
+    """
+
+    API_PREFIXES = ("/v1/", "/api/", "/auth/", "/version", "/openapi.json", "/docs", "/redoc")
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "/")
+
+        # Let API routes pass through to FastAPI
+        if any(path.startswith(prefix) for prefix in self.API_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+
+        # Try to serve a static file
+        asset = resolve_web_asset(path)
+        if asset is not None:
+            response = FileResponse(asset)
+            await response(scope, receive, send)
+            return
+
+        # For _next/* assets that don't exist, return 404
+        clean = path.strip("/")
+        if clean.startswith("_next") or clean.startswith("__next"):
+            response = Response(content='{"detail":"Not Found"}', status_code=404, media_type="application/json")
+            await response(scope, receive, send)
+            return
+
+        # SPA fallback — serve index.html for all other paths
+        fallback = resolve_web_asset("")
+        if fallback is not None:
+            response = FileResponse(fallback)
+            await response(scope, receive, send)
+            return
+
+        # No web_dist at all — pass through to FastAPI
+        await self.app(scope, receive, send)
 
 
 def create_app() -> FastAPI:
@@ -466,19 +517,8 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
 
-    @app.api_route("/{full_path:path}", methods=["GET", "POST", "HEAD"], include_in_schema=False)
-    async def serve_web(full_path: str):
-        asset = resolve_web_asset(full_path)
-        if asset is not None:
-            return FileResponse(asset)
-
-        # Static assets (_next/*) must not fallback to HTML — return 404
-        if full_path.strip("/").startswith("_next"):
-            raise HTTPException(status_code=404, detail="Not Found")
-
-        fallback = resolve_web_asset("")
-        if fallback is None:
-            raise HTTPException(status_code=404, detail="Not Found")
-        return FileResponse(fallback)
+    # SPA middleware — must be added AFTER CORS middleware
+    # (middleware stack is LIFO, so this runs before CORS)
+    app.add_middleware(SPAMiddleware)
 
     return app
