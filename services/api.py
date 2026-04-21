@@ -118,7 +118,17 @@ def resolve_web_asset(requested_path: str) -> Path | None:
     if not WEB_DIST_DIR.exists():
         return None
 
-    clean_path = requested_path.strip("/")
+    # Decode URL-encoded paths and extract real path if it's a full URL
+    from urllib.parse import unquote, urlparse
+    decoded_path = unquote(requested_path)
+    if decoded_path.startswith("/http://") or decoded_path.startswith("/https://"):
+        try:
+            parsed = urlparse(decoded_path[1:])
+            decoded_path = parsed.path or "/"
+        except Exception:
+            pass
+
+    clean_path = decoded_path.strip("/")
     if not clean_path:
         candidates = [WEB_DIST_DIR / "index.html"]
     else:
@@ -181,11 +191,11 @@ class SPAMiddleware:
         asset = resolve_web_asset(path)
         if asset is not None:
             response = FileResponse(asset)
-            # Cache static assets (_next/) aggressively, HTML files never cache
+            # Cache static assets (_next/) aggressively, HTML/txt files never cache
             asset_str = str(asset)
             if "/_next/" in asset_str or "/_next\\" in asset_str:
                 response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-            elif asset_str.endswith(".html"):
+            elif asset_str.endswith(".html") or asset_str.endswith(".txt"):
                 response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             await response(scope, receive, send)
             return
