@@ -298,7 +298,25 @@ export default function ImagePage() {
 
     // Capture reference image before clearing
     const currentRefImage = referenceImage;
+    const currentRefPreview = referencePreview;
     clearReferenceImage();
+
+    // Convert reference image to base64 data URL for storage
+    let refImageDataUrl: string | undefined;
+    if (currentRefImage && currentRefPreview) {
+      try {
+        const buffer = await currentRefImage.arrayBuffer();
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        refImageDataUrl = `data:${currentRefImage.type || "image/png"};base64,${base64}`;
+      } catch {
+        // If conversion fails, skip storing the reference image
+      }
+    }
+
+    // Update draft with reference image
+    if (refImageDataUrl) {
+      draftConversation.referenceImage = refImageDataUrl;
+    }
 
     try {
       await persistConversation(draftConversation);
@@ -483,8 +501,19 @@ export default function ImagePage() {
             ) : (
               <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5">
                 <div className="flex justify-end">
-                  <div className="max-w-[80%] px-1 pt-1 text-right text-[15px] leading-8 text-stone-700">
-                    {selectedConversation.prompt}
+                  <div className="max-w-[80%] px-1 pt-1 text-right">
+                    {selectedConversation.referenceImage && (
+                      <div className="mb-2 flex justify-end">
+                        <img
+                          src={selectedConversation.referenceImage}
+                          alt="参考图"
+                          className="h-24 w-24 rounded-xl border border-stone-200 object-cover"
+                        />
+                      </div>
+                    )}
+                    <div className="text-[15px] leading-8 text-stone-700">
+                      {selectedConversation.prompt}
+                    </div>
                   </div>
                 </div>
 

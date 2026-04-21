@@ -23,6 +23,7 @@ export type ImageConversation = {
   createdAt: string;
   status: ImageConversationStatus;
   error?: string;
+  referenceImage?: string; // base64 data URL of the reference image
 };
 
 const imageConversationStorage = localforage.createInstance({
