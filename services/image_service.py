@@ -496,9 +496,11 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
     file_id = file_info.get("file_id") or ""
     upload_url = file_info.get("upload_url") or ""
     if not file_id or not upload_url:
-        raise ImageGenerationError("file create returned no file_id or upload_url")
+        raise ImageGenerationError(f"file create returned no file_id or upload_url: {json.dumps(file_info)[:300]}")
+    print(f"[image-upload] created file={file_id} upload_url={upload_url[:80]}...")
 
     # Step 2: Upload the actual file content
+    print(f"[image-upload] uploading {len(image_data)} bytes to blob storage...")
     response = _retry(
         lambda: session.put(
             upload_url,
@@ -513,7 +515,8 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
         retries=3,
     )
     if not response.ok:
-        raise ImageGenerationError(f"file upload failed: HTTP {response.status_code}")
+        raise ImageGenerationError(f"file upload failed: HTTP {response.status_code} {response.text[:200]}")
+    print(f"[image-upload] blob upload done, confirming...")
 
     # Step 3: Mark upload as complete
     response = _retry(
@@ -530,10 +533,11 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
         retries=3,
     )
     if not response.ok:
-        raise ImageGenerationError(f"file upload confirm failed: HTTP {response.status_code}")
+        raise ImageGenerationError(f"file upload confirm failed: HTTP {response.status_code} {response.text[:200]}")
+    print(f"[image-upload] confirmed, polling status...")
 
     # Step 4: Poll until file is ready
-    for _ in range(30):
+    for poll_attempt in range(30):
         response = session.get(
             BASE_URL + f"/backend-api/files/{file_id}",
             headers={
@@ -543,12 +547,16 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
             timeout=15,
         )
         if response.ok:
-            status = response.json().get("status")
+            file_status = response.json()
+            status = file_status.get("status")
+            print(f"[image-upload] poll {poll_attempt}: file={file_id} status={status}")
             if status == "success":
                 print(f"[image-upload] file {file_id} ready")
                 return file_id
             if status in ("error", "failed"):
-                raise ImageGenerationError(f"file processing failed: {status}")
+                raise ImageGenerationError(f"file processing failed: {status} {response.text[:200]}")
+        else:
+            print(f"[image-upload] poll {poll_attempt}: file={file_id} HTTP {response.status_code} {response.text[:200]}")
         time.sleep(1)
 
     raise ImageGenerationError("file upload timed out waiting for processing")
