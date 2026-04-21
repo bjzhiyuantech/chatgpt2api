@@ -314,7 +314,7 @@ def _send_conversation(
         retries=3,
     )
     if not response.ok:
-        raise ImageGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
+        raise ImageGenerationError(response.text[:800] or f"conversation failed: {response.status_code}")
     return response
 
 
