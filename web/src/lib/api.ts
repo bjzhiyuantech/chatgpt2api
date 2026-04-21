@@ -217,3 +217,21 @@ export async function syncCPAPool(poolId: string) {
 export async function fetchCPAGlobalStatus() {
   return httpRequest<CPAStatus>("/api/cpa/status");
 }
+
+// ── Proxy config ───────────────────────────────────────────────────
+
+export type ProxyConfig = {
+  proxy_url: string;
+  enabled: boolean;
+};
+
+export async function fetchProxyConfig() {
+  return httpRequest<ProxyConfig>("/api/proxy/config");
+}
+
+export async function updateProxyConfig(proxyUrl: string) {
+  return httpRequest<ProxyConfig>("/api/proxy/config", {
+    method: "POST",
+    body: { proxy_url: proxyUrl },
+  });
+}

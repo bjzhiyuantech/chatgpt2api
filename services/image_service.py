@@ -13,6 +13,7 @@ from curl_cffi.requests import Session
 
 from services.account_service import account_service
 from services.config import config
+from services.proxy_service import proxy_config
 from services import proof_of_work
 
 
@@ -102,6 +103,7 @@ def _new_session(access_token: str) -> tuple[Session, dict]:
     session = Session(
         impersonate=fp.get("impersonate") or "edge101",
         verify=config.tls_verify,
+        proxies=proxy_config.proxy_dict,
     )
     session.headers.update(
         {

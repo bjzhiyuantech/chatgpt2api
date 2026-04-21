@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
+  Globe,
   Link2,
   LoaderCircle,
   Pencil,
@@ -36,9 +37,12 @@ import {
   deleteCPAPool,
   fetchCPAPoolStatus,
   fetchCPAPools,
+  fetchProxyConfig,
   syncCPAPool,
   updateCPAPool,
+  updateProxyConfig,
   type CPAPool,
+  type ProxyConfig,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +53,11 @@ export default function SettingsPage() {
   const [pools, setPools] = useState<CPAPool[]>([]);
   const [poolStatuses, setPoolStatuses] = useState<Record<string, PoolStatus>>({});
   const [isLoading, setIsLoading] = useState(true);
+
+  // Proxy state
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [savedProxyUrl, setSavedProxyUrl] = useState("");
+  const [isSavingProxy, setIsSavingProxy] = useState(false);
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -65,13 +74,18 @@ export default function SettingsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  const loadPools = async () => {
+  const loadConfig = async () => {
     setIsLoading(true);
     try {
-      const data = await fetchCPAPools();
-      setPools(data.pools);
+      const [poolsData, proxyData] = await Promise.all([
+        fetchCPAPools(),
+        fetchProxyConfig(),
+      ]);
+      setPools(poolsData.pools);
+      setProxyUrl(proxyData.proxy_url);
+      setSavedProxyUrl(proxyData.proxy_url);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "加载 CPA 配置失败");
+      toast.error(error instanceof Error ? error.message : "加载配置失败");
     } finally {
       setIsLoading(false);
     }
@@ -80,7 +94,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (didLoadRef.current) return;
     didLoadRef.current = true;
-    void loadPools();
+    void loadConfig();
   }, []);
 
   const openAddDialog = () => {
@@ -384,6 +398,72 @@ export default function SettingsPage() {
                 <li>禁用或删除号池即可停止从该 CPA 获取 token</li>
               </ul>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Proxy Config Card */}
+        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="space-y-5 p-6">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-stone-100">
+                <Globe className="size-5 text-stone-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight">代理设置</h2>
+                <p className="text-sm text-stone-500">
+                  配置 SOCKS5/HTTP 代理，用于访问 ChatGPT 接口
+                </p>
+              </div>
+            </div>
+
+            {!isLoading && (
+              <>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-1.5 text-sm font-medium text-stone-700">
+                    <Globe className="size-3.5" />
+                    代理地址
+                  </label>
+                  <Input
+                    value={proxyUrl}
+                    onChange={(e) => setProxyUrl(e.target.value)}
+                    placeholder="socks5://127.0.0.1:1080 或 http://user:pass@host:port"
+                    className="h-11 rounded-xl border-stone-200 bg-white"
+                  />
+                  <p className="text-xs text-stone-400">
+                    支持 socks5://、http://、https:// 协议，留空则直连
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    className="h-10 rounded-xl bg-stone-950 px-5 text-white hover:bg-stone-800"
+                    onClick={() => {
+                      setIsSavingProxy(true);
+                      updateProxyConfig(proxyUrl.trim())
+                        .then((cfg) => {
+                          setSavedProxyUrl(cfg.proxy_url);
+                          toast.success(cfg.proxy_url ? "代理已配置" : "代理已清除，使用直连");
+                        })
+                        .catch((err) => toast.error(err instanceof Error ? err.message : "保存失败"))
+                        .finally(() => setIsSavingProxy(false));
+                    }}
+                    disabled={isSavingProxy || proxyUrl.trim() === savedProxyUrl}
+                  >
+                    {isSavingProxy ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <Save className="size-4" />
+                    )}
+                    保存
+                  </Button>
+                  {savedProxyUrl && (
+                    <Badge variant="success" className="rounded-md px-2.5 py-1">
+                      已启用
+                    </Badge>
+                  )}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </section>

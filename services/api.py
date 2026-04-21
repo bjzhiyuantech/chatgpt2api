@@ -14,6 +14,7 @@ from services.account_service import account_service
 from services.config import config
 from services.backend_service import BackendService
 from services.cpa_service import cpa_service, cpa_config, fetch_tokens_for_pool, fetch_pool_status
+from services.proxy_service import proxy_config
 from services.image_service import ImageGenerationError
 from services.task_service import task_service
 from services.version import get_app_version
@@ -67,6 +68,10 @@ class CPAPoolUpdateRequest(BaseModel):
     base_url: str | None = None
     secret_key: str | None = None
     enabled: bool | None = None
+
+
+class ProxyConfigUpdateRequest(BaseModel):
+    proxy_url: str | None = None
 
 
 def build_model_item(model_id: str) -> dict[str, object]:
@@ -435,6 +440,29 @@ def create_app() -> FastAPI:
             return {"enabled": False, "pools": 0, "tokens": 0}
         tokens = await run_in_threadpool(cpa_service.fetch_all_tokens)
         return {"enabled": True, "pools": len(cpa_config.usable_pools()), "tokens": len(tokens)}
+
+    # ── Proxy config endpoints ──────────────────────────────────────
+
+    @router.get("/api/proxy/config")
+    async def get_proxy_config(authorization: str | None = Header(default=None)):
+        require_auth_key(authorization)
+        cfg = proxy_config.get()
+        return {
+            "proxy_url": cfg.get("proxy_url") or "",
+            "enabled": bool(cfg.get("proxy_url")),
+        }
+
+    @router.post("/api/proxy/config")
+    async def update_proxy_config(
+            body: ProxyConfigUpdateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_auth_key(authorization)
+        cfg = proxy_config.update(proxy_url=body.proxy_url)
+        return {
+            "proxy_url": cfg.get("proxy_url") or "",
+            "enabled": bool(cfg.get("proxy_url")),
+        }
 
     app.include_router(router)
 
