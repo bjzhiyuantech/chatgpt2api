@@ -534,7 +534,8 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
     )
     if not response.ok:
         raise ImageGenerationError(f"file upload confirm failed: HTTP {response.status_code} {response.text[:200]}")
-    print(f"[image-upload] confirmed, polling status...")
+    confirm_data = response.json() if response.text.strip() else {}
+    print(f"[image-upload] confirm response: {json.dumps(confirm_data)[:500]}")
 
     # Step 4: Poll until file is ready
     for poll_attempt in range(30):
@@ -549,7 +550,9 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
         if response.ok:
             file_status = response.json()
             status = file_status.get("status")
-            print(f"[image-upload] poll {poll_attempt}: file={file_id} status={status}")
+            print(f"[image-upload] poll {poll_attempt}: file={file_id} status={status} keys={list(file_status.keys())}")
+            if poll_attempt == 0:
+                print(f"[image-upload] poll full response: {json.dumps(file_status)[:500]}")
             if status == "success":
                 print(f"[image-upload] file {file_id} ready")
                 return file_id
