@@ -587,7 +587,7 @@ def generate_image_result(
     prompt: str,
     model: str = DEFAULT_MODEL,
     n: int = 1,
-    image_data: bytes | None = None,
+    images_data: list[bytes] | None = None,
 ) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -601,10 +601,10 @@ def generate_image_result(
     session, fp = _new_session(access_token)
     try:
         upstream_model = _resolve_upstream_model(access_token, model)
-        has_image = image_data is not None and len(image_data) > 0
+        num_images = len(images_data) if images_data else 0
         print(
             f"[image-upstream] start token={access_token[:12]}... "
-            f"requested_model={model} upstream_model={upstream_model} n={n} has_ref_image={has_image}"
+            f"requested_model={model} upstream_model={upstream_model} n={n} ref_images={num_images}"
         )
         results: list[GeneratedImage] = []
         for _ in range(n):
@@ -619,11 +619,14 @@ def generate_image_result(
                     proof_config=_pow_config(USER_AGENT),
                 )
 
-            # Upload reference image if provided
+            # Upload reference images if provided
             image_file_ids = None
-            if has_image:
-                file_id = _upload_image(session, access_token, device_id, image_data)
-                image_file_ids = [file_id]
+            if images_data:
+                image_file_ids = []
+                for i, img_data in enumerate(images_data):
+                    file_id = _upload_image(session, access_token, device_id, img_data, filename=f"image_{i}.png")
+                    image_file_ids.append(file_id)
+                print(f"[image-upstream] uploaded {len(image_file_ids)} reference image(s)")
 
             parent_message_id = str(uuid.uuid4())
             response = _send_conversation(

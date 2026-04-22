@@ -98,8 +98,8 @@ export default function ImagePage() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [availableQuota, setAvailableQuota] = useState("加载中");
-  const [referenceImage, setReferenceImage] = useState<File | null>(null);
-  const [referencePreview, setReferencePreview] = useState<string | null>(null);
+  const [referenceImages, setReferenceImages] = useState<File[]>([]);
+  const [referencePreviews, setReferencePreviews] = useState<string[]>([]);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -204,38 +204,47 @@ export default function ImagePage() {
     }
   };
 
-  const clearReferenceImage = () => {
-    setReferenceImage(null);
-    if (referencePreview) {
-      URL.revokeObjectURL(referencePreview);
-      setReferencePreview(null);
-    }
+  const clearReferenceImages = () => {
+    referencePreviews.forEach((url) => URL.revokeObjectURL(url));
+    setReferenceImages([]);
+    setReferencePreviews([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
-  const handleFileSelect = (file: File | null) => {
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast.error("请选择图片文件");
-      return;
+  const handleFileSelect = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const newFiles: File[] = [];
+    const newPreviews: string[] = [];
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) {
+        toast.error(`${file.name} 不是图片文件`);
+        continue;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        toast.error(`${file.name} 超过 20MB`);
+        continue;
+      }
+      newFiles.push(file);
+      newPreviews.push(URL.createObjectURL(file));
     }
-    if (file.size > 20 * 1024 * 1024) {
-      toast.error("图片不能超过 20MB");
-      return;
+    if (newFiles.length > 0) {
+      setReferenceImages((prev) => [...prev, ...newFiles]);
+      setReferencePreviews((prev) => [...prev, ...newPreviews]);
     }
-    if (referencePreview) {
-      URL.revokeObjectURL(referencePreview);
-    }
-    setReferenceImage(file);
-    setReferencePreview(URL.createObjectURL(file));
+  };
+
+  const removeReferenceImage = (index: number) => {
+    URL.revokeObjectURL(referencePreviews[index]);
+    setReferenceImages((prev) => prev.filter((_, i) => i !== index));
+    setReferencePreviews((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleCreateDraft = () => {
     setSelectedConversationId(null);
     setImagePrompt("");
-    clearReferenceImage();
+    clearReferenceImages();
     textareaRef.current?.focus();
   };
 
@@ -296,26 +305,29 @@ export default function ImagePage() {
     setSelectedConversationId(conversationId);
     setImagePrompt("");
 
-    // Capture reference image before clearing
-    const currentRefImage = referenceImage;
-    const currentRefPreview = referencePreview;
-    clearReferenceImage();
+    // Capture reference images before clearing
+    const currentRefImages = [...referenceImages];
+    const currentRefPreviews = [...referencePreviews];
+    clearReferenceImages();
 
-    // Convert reference image to base64 data URL for storage
-    let refImageDataUrl: string | undefined;
-    if (currentRefImage && currentRefPreview) {
-      try {
-        const buffer = await currentRefImage.arrayBuffer();
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-        refImageDataUrl = `data:${currentRefImage.type || "image/png"};base64,${base64}`;
-      } catch {
-        // If conversion fails, skip storing the reference image
+    // Convert reference images to base64 data URLs for storage
+    let refImageDataUrls: string[] = [];
+    if (currentRefImages.length > 0) {
+      for (const file of currentRefImages) {
+        try {
+          const buffer = await file.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+          refImageDataUrls.push(`data:${file.type || "image/png"};base64,${base64}`);
+        } catch {
+          // skip failed conversions
+        }
       }
     }
 
-    // Update draft with reference image
-    if (refImageDataUrl) {
-      draftConversation.referenceImage = refImageDataUrl;
+    // Update draft with reference images
+    if (refImageDataUrls.length > 0) {
+      draftConversation.referenceImage = refImageDataUrls[0];
+      (draftConversation as any).referenceImages = refImageDataUrls;
     }
 
     try {
@@ -323,8 +335,8 @@ export default function ImagePage() {
 
       const tasks = Array.from({ length: parsedCount }, async (_, index) => {
         try {
-          let data = currentRefImage
-            ? await editImage(prompt, currentRefImage, imageModel)
+          let data = currentRefImages.length > 0
+            ? await editImage(prompt, currentRefImages, imageModel)
             : await generateImage(prompt, imageModel);
 
           // Handle async task — poll until completed
@@ -529,12 +541,17 @@ export default function ImagePage() {
                 <div className="flex justify-end">
                   <div className="max-w-[80%] px-1 pt-1 text-right">
                     {selectedConversation.referenceImage && (
-                      <div className="mb-2 flex justify-end">
-                        <img
-                          src={selectedConversation.referenceImage}
-                          alt="参考图"
-                          className="h-24 w-24 rounded-xl border border-stone-200 object-cover"
-                        />
+                      <div className="mb-2 flex flex-wrap justify-end gap-1.5">
+                        {((selectedConversation as any).referenceImages || [selectedConversation.referenceImage]).map(
+                          (img: string, i: number) => (
+                            <img
+                              key={i}
+                              src={img}
+                              alt={`参考图 ${i + 1}`}
+                              className="h-20 w-20 rounded-xl border border-stone-200 object-cover"
+                            />
+                          ),
+                        )}
                       </div>
                     )}
                     <div className="text-[15px] leading-8 text-stone-700">
@@ -612,26 +629,28 @@ export default function ImagePage() {
                 }}
               >
                 {/* Reference image preview */}
-                {referencePreview && (
-                  <div className="flex items-center gap-2 px-6 pt-4 pb-0">
-                    <div className="group relative inline-block">
-                      <img
-                        src={referencePreview}
-                        alt="参考图"
-                        className="h-16 w-16 rounded-xl border border-stone-200 object-cover"
-                      />
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          clearReferenceImage();
-                        }}
-                        className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-stone-800 text-white opacity-0 transition group-hover:opacity-100"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </div>
-                    <span className="text-xs text-stone-400">参考图已添加</span>
+                {referencePreviews.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 px-6 pt-4 pb-0">
+                    {referencePreviews.map((preview, index) => (
+                      <div key={index} className="group relative inline-block">
+                        <img
+                          src={preview}
+                          alt={`参考图 ${index + 1}`}
+                          className="h-16 w-16 rounded-xl border border-stone-200 object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeReferenceImage(index);
+                          }}
+                          className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-stone-800 text-white opacity-0 transition group-hover:opacity-100"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    ))}
+                    <span className="text-xs text-stone-400">{referencePreviews.length} 张参考图</span>
                   </div>
                 )}
 
@@ -639,7 +658,7 @@ export default function ImagePage() {
                   ref={textareaRef}
                   value={imagePrompt}
                   onChange={(event) => setImagePrompt(event.target.value)}
-                  placeholder={referenceImage ? "描述你想要的修改..." : "输入你想要生成的画面"}
+                  placeholder={referenceImages.length > 0 ? "描述你想要的修改..." : "输入你想要生成的画面"}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -650,7 +669,7 @@ export default function ImagePage() {
                   }}
                   className={cn(
                     "resize-none rounded-[32px] border-0 bg-transparent px-6 pb-20 text-[15px] leading-7 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0",
-                    referencePreview ? "min-h-[100px] pt-3" : "min-h-[148px] pt-6",
+                    referencePreviews.length > 0 ? "min-h-[100px] pt-3" : "min-h-[148px] pt-6",
                   )}
                 />
 
@@ -659,9 +678,11 @@ export default function ImagePage() {
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
                   onChange={(e) => {
-                    handleFileSelect(e.target.files?.[0] ?? null);
+                    handleFileSelect(e.target.files);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
                   }}
                 />
 
@@ -675,7 +696,7 @@ export default function ImagePage() {
                       }}
                       className={cn(
                         "inline-flex size-10 items-center justify-center rounded-full border transition",
-                        referenceImage
+                        referenceImages.length > 0
                           ? "border-emerald-300 bg-emerald-50 text-emerald-600"
                           : "border-stone-200 bg-white text-stone-500 hover:bg-stone-50 hover:text-stone-700",
                       )}

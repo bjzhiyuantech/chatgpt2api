@@ -43,13 +43,12 @@ class BackendService:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
 
-    def generate_with_pool(self, prompt: str, model: str, n: int, image_data: bytes | None = None):
+    def generate_with_pool(self, prompt: str, model: str, n: int, images_data: list[bytes] | None = None):
         if cpa_service.enabled:
-            return self._generate_with_cpa(prompt, model, n, image_data)
-        return self._generate_with_local_pool(prompt, model, n, image_data)
+            return self._generate_with_cpa(prompt, model, n, images_data)
+        return self._generate_with_local_pool(prompt, model, n, images_data)
 
-    def _generate_with_cpa(self, prompt: str, model: str, n: int, image_data: bytes | None = None):
-        """Fetch token from CLIProxyAPI on-the-fly and generate images."""
+    def _generate_with_cpa(self, prompt: str, model: str, n: int, images_data: list[bytes] | None = None):
         attempted_tokens: set[str] = set()
         max_attempts = 5
 
@@ -57,39 +56,21 @@ class BackendService:
             request_token = cpa_service.get_token(excluded_tokens=attempted_tokens)
             if not request_token:
                 if attempt == 0:
-                    raise HTTPException(
-                        status_code=503,
-                        detail={"error": "No access_token available from CPA"},
-                    )
+                    raise HTTPException(status_code=503, detail={"error": "No access_token available from CPA"})
                 break
             attempted_tokens.add(request_token)
             print(f"[image-generate] cpa token={request_token[:12]}... model={model} n={n}")
 
             try:
-                result = generate_image_result(request_token, prompt, model, n, image_data=image_data)
+                result = generate_image_result(request_token, prompt, model, n, images_data=images_data)
                 print(f"[image-generate] cpa success token={request_token[:12]}...")
                 return result
             except ImageQueuedError as exc:
                 print(f"[image-generate] cpa queued token={request_token[:12]}... conversation={exc.conversation_id[:16]}")
                 task = task_service.create_task(prompt, model)
-                task_service.update_task(
-                    task.id,
-                    conversation_id=exc.conversation_id,
-                    access_token=exc.access_token,
-                    device_id=exc.device_id,
-                )
-                task_service.submit_poll(
-                    task.id,
-                    lambda: poll_queued_image(
-                        exc.conversation_id, exc.access_token, exc.device_id, prompt,
-                    ),
-                )
-                return {
-                    "created": 0,
-                    "task_id": task.id,
-                    "status": "pending",
-                    "message": str(exc),
-                }
+                task_service.update_task(task.id, conversation_id=exc.conversation_id, access_token=exc.access_token, device_id=exc.device_id)
+                task_service.submit_poll(task.id, lambda: poll_queued_image(exc.conversation_id, exc.access_token, exc.device_id, prompt))
+                return {"created": 0, "task_id": task.id, "status": "pending", "message": str(exc)}
             except ImageGenerationError as exc:
                 print(f"[image-generate] cpa fail token={request_token[:12]}... error={exc}")
                 if is_token_invalid_error(str(exc)):
@@ -97,13 +78,9 @@ class BackendService:
                     continue
                 raise
 
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "All CPA tokens exhausted or failed"},
-        )
+        raise HTTPException(status_code=503, detail={"error": "All CPA tokens exhausted or failed"})
 
-    def _generate_with_local_pool(self, prompt: str, model: str, n: int, image_data: bytes | None = None):
-        """Original local account pool logic."""
+    def _generate_with_local_pool(self, prompt: str, model: str, n: int, images_data: list[bytes] | None = None):
         attempted_tokens: set[str] = set()
 
         while True:
@@ -115,54 +92,25 @@ class BackendService:
             attempted_tokens.add(request_token)
             refreshed_account = self._refresh_request_token(request_token)
             if not self._is_account_ready_for_image(refreshed_account):
-                print(
-                    f"[image-generate] skip token={request_token[:12]}... "
-                    f"quota={refreshed_account.get('quota') if refreshed_account else 'unknown'} "
-                    f"status={refreshed_account.get('status') if refreshed_account else 'unknown'}"
-                )
+                print(f"[image-generate] skip token={request_token[:12]}... quota={refreshed_account.get('quota') if refreshed_account else 'unknown'}")
                 continue
 
             print(f"[image-generate] start pooled token={request_token[:12]}... model={model} n={n}")
             try:
-                result = generate_image_result(request_token, prompt, model, n, image_data=image_data)
+                result = generate_image_result(request_token, prompt, model, n, images_data=images_data)
                 account = self.account_service.mark_image_result(request_token, success=True)
-                print(
-                    f"[image-generate] success pooled token={request_token[:12]}... "
-                    f"quota={account.get('quota') if account else 'unknown'} status={account.get('status') if account else 'unknown'}"
-                )
+                print(f"[image-generate] success pooled token={request_token[:12]}... quota={account.get('quota') if account else 'unknown'}")
                 return result
             except ImageQueuedError as exc:
-                print(
-                    f"[image-generate] queued pooled token={request_token[:12]}... "
-                    f"conversation={exc.conversation_id[:16]}"
-                )
+                print(f"[image-generate] queued pooled token={request_token[:12]}... conversation={exc.conversation_id[:16]}")
                 task = task_service.create_task(prompt, model)
-                task_service.update_task(
-                    task.id,
-                    conversation_id=exc.conversation_id,
-                    access_token=exc.access_token,
-                    device_id=exc.device_id,
-                )
-                task_service.submit_poll(
-                    task.id,
-                    lambda: poll_queued_image(
-                        exc.conversation_id, exc.access_token, exc.device_id, prompt,
-                    ),
-                )
-                return {
-                    "created": 0,
-                    "task_id": task.id,
-                    "status": "pending",
-                    "message": str(exc),
-                }
+                task_service.update_task(task.id, conversation_id=exc.conversation_id, access_token=exc.access_token, device_id=exc.device_id)
+                task_service.submit_poll(task.id, lambda: poll_queued_image(exc.conversation_id, exc.access_token, exc.device_id, prompt))
+                return {"created": 0, "task_id": task.id, "status": "pending", "message": str(exc)}
             except ImageGenerationError as exc:
                 account = self.account_service.mark_image_result(request_token, success=False)
-                print(
-                    f"[image-generate] fail pooled token={request_token[:12]}... "
-                    f"error={exc} quota={account.get('quota') if account else 'unknown'} status={account.get('status') if account else 'unknown'}"
-                )
+                print(f"[image-generate] fail pooled token={request_token[:12]}... error={exc}")
                 if is_token_invalid_error(str(exc)):
                     self.account_service.remove_token(request_token)
-                    print(f"[image-generate] remove invalid token={request_token[:12]}...")
                     continue
                 raise

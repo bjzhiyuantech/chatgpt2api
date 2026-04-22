@@ -245,7 +245,7 @@ def create_app() -> FastAPI:
 
     @router.post("/v1/images/edits")
     async def edit_images(
-            image: UploadFile = File(...),
+            image: list[UploadFile] = File(...),
             prompt: str = Form(...),
             model: str = Form(default="gpt-image-1"),
             n: int = Form(default=1),
@@ -258,11 +258,17 @@ def create_app() -> FastAPI:
         if n < 1 or n > 4:
             raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
 
-        image_data = await image.read()
-        if not image_data:
-            raise HTTPException(status_code=400, detail={"error": "image file is empty"})
-        if len(image_data) > 20 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail={"error": "image file too large (max 20MB)"})
+        images_data: list[bytes] = []
+        for img in image:
+            data = await img.read()
+            if not data:
+                continue
+            if len(data) > 20 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail={"error": f"image {img.filename} too large (max 20MB)"})
+            images_data.append(data)
+
+        if not images_data:
+            raise HTTPException(status_code=400, detail={"error": "at least one image is required"})
 
         try:
             return await run_in_threadpool(
@@ -270,7 +276,7 @@ def create_app() -> FastAPI:
                 prompt.strip(),
                 model,
                 n,
-                image_data,
+                images_data,
             )
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
