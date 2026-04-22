@@ -259,9 +259,7 @@ def _send_conversation(
         for file_id in image_file_ids:
             parts.append({
                 "asset_pointer": f"file-service://{file_id}",
-                "size_bytes": 0,
-                "width": 0,
-                "height": 0,
+                "content_type": "image_asset_pointer",
             })
         parts.append(prompt)
         content = {"content_type": "multimodal_text", "parts": parts}
@@ -270,12 +268,10 @@ def _send_conversation(
                 "id": file_id,
                 "name": f"image_{i}.png",
                 "size": 0,
-                "mimeType": "image/png",
-                "width": 0,
-                "height": 0,
             }
             for i, file_id in enumerate(image_file_ids)
         ]
+        print(f"[conversation] sending multimodal message with {len(image_file_ids)} image(s)")
     else:
         content = {"content_type": "text", "parts": [prompt]}
         attachments = []
@@ -331,7 +327,13 @@ def _send_conversation(
         retries=3,
     )
     if not response.ok:
-        raise ImageGenerationError(response.text[:800] or f"conversation failed: {response.status_code}")
+        error_body = ""
+        try:
+            error_body = response.text[:1000]
+        except Exception:
+            pass
+        print(f"[conversation] HTTP {response.status_code} error_body={error_body!r}")
+        raise ImageGenerationError(error_body or f"conversation failed: {response.status_code}")
     return response
 
 
