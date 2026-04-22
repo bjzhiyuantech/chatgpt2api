@@ -4,7 +4,7 @@ from fastapi import HTTPException
 
 from services.account_service import AccountService
 from services.cpa_service import cpa_service
-from services.image_service import ImageGenerationError, ImageQueuedError, generate_image_result, is_token_invalid_error, poll_queued_image
+from services.image_service import ImageGenerationError, ImageQueuedError, generate_image_result, is_token_invalid_error, is_token_throttled_error, poll_queued_image
 from services.task_service import task_service
 
 
@@ -73,7 +73,7 @@ class BackendService:
                 return {"created": 0, "task_id": task.id, "status": "pending", "message": str(exc)}
             except ImageGenerationError as exc:
                 print(f"[image-generate] cpa fail token={request_token[:12]}... error={exc}")
-                if is_token_invalid_error(str(exc)):
+                if is_token_invalid_error(str(exc)) or is_token_throttled_error(str(exc)):
                     cpa_service.invalidate_cache()
                     continue
                 raise
@@ -112,5 +112,7 @@ class BackendService:
                 print(f"[image-generate] fail pooled token={request_token[:12]}... error={exc}")
                 if is_token_invalid_error(str(exc)):
                     self.account_service.remove_token(request_token)
+                    continue
+                if is_token_throttled_error(str(exc)):
                     continue
                 raise

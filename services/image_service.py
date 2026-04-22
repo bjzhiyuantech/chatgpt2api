@@ -226,6 +226,11 @@ def is_token_invalid_error(message: str) -> bool:
     )
 
 
+def is_token_throttled_error(message: str) -> bool:
+    text = str(message or "").lower()
+    return "throttled" in text or "rate_limit" in text or "too many" in text
+
+
 def _send_conversation(
     session: Session,
     access_token: str,
