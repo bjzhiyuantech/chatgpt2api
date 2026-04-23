@@ -264,68 +264,71 @@ def _send_conversation(
         for file_id in image_file_ids:
             parts.append({
                 "asset_pointer": f"file-service://{file_id}",
-                "content_type": "image_asset_pointer",
+                "size_bytes": 0,
             })
         parts.append(prompt)
         content = {"content_type": "multimodal_text", "parts": parts}
         attachments = [
             {
                 "id": file_id,
-                "name": f"image_{i}.png",
-                "size": 0,
             }
-            for i, file_id in enumerate(image_file_ids)
+            for file_id in image_file_ids
         ]
         print(f"[conversation] sending multimodal message with {len(image_file_ids)} image(s)")
     else:
         content = {"content_type": "text", "parts": [prompt]}
         attachments = []
 
+    msg_payload = {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "content": content,
+                "metadata": {
+                    "attachments": attachments,
+                },
+            }
+        ],
+        "parent_message_id": parent_message_id,
+        "model": model,
+        "history_and_training_disabled": False,
+        "timezone_offset_min": -480,
+        "timezone": "America/Los_Angeles",
+        "conversation_mode": {"kind": "primary_assistant"},
+        "conversation_origin": None,
+        "force_paragen": False,
+        "force_paragen_model_slug": "",
+        "force_rate_limit": False,
+        "force_use_sse": True,
+        "paragen_cot_summary_display_override": "allow",
+        "paragen_stream_type_override": None,
+        "reset_rate_limits": False,
+        "suggestions": [],
+        "supported_encodings": [],
+        "system_hints": ["picture_v2"],
+        "variant_purpose": "comparison_implicit",
+        "websocket_request_id": str(uuid.uuid4()),
+        "client_contextual_info": {
+            "is_dark_mode": False,
+            "time_since_loaded": random.randint(50, 500),
+            "page_height": random.randint(500, 1000),
+            "page_width": random.randint(1000, 2000),
+            "pixel_ratio": 1.2,
+            "screen_height": random.randint(800, 1200),
+            "screen_width": random.randint(1200, 2200),
+        },
+    }
+
+    if image_file_ids:
+        print(f"[conversation] message content: {json.dumps(content)[:500]}")
+
     response = _retry(
         lambda: session.post(
             BASE_URL + "/backend-api/conversation",
             headers=headers,
-            json={
-                "action": "next",
-                "messages": [
-                    {
-                        "id": str(uuid.uuid4()),
-                        "author": {"role": "user"},
-                        "content": content,
-                        "metadata": {
-                            "attachments": attachments,
-                        },
-                    }
-                ],
-                "parent_message_id": parent_message_id,
-                "model": model,
-                "history_and_training_disabled": False,
-                "timezone_offset_min": -480,
-                "timezone": "America/Los_Angeles",
-                "conversation_mode": {"kind": "primary_assistant"},
-                "conversation_origin": None,
-                "force_paragen": False,
-                "force_paragen_model_slug": "",
-                "force_rate_limit": False,
-                "force_use_sse": True,
-                "paragen_cot_summary_display_override": "allow",
-                "paragen_stream_type_override": None,
-                "reset_rate_limits": False,
-                "suggestions": [],
-                "supported_encodings": [],
-                "system_hints": ["picture_v2"],
-                "variant_purpose": "comparison_implicit",
-                "websocket_request_id": str(uuid.uuid4()),
-                "client_contextual_info": {
-                    "is_dark_mode": False,
-                    "time_since_loaded": random.randint(50, 500),
-                    "page_height": random.randint(500, 1000),
-                    "page_width": random.randint(1000, 2000),
-                    "pixel_ratio": 1.2,
-                    "screen_height": random.randint(800, 1200),
-                    "screen_width": random.randint(1200, 2200),
-                },
-            },
+            json=msg_payload,
             stream=True,
             timeout=180,
         ),
