@@ -258,23 +258,19 @@ def _send_conversation(
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
 
-    # Build message content — text only or multimodal (text + images)
+    # Build message content — text only or with image attachments
     if image_file_ids:
-        parts: list = []
-        for file_id in image_file_ids:
-            parts.append({
-                "content_type": "image_asset_pointer",
-                "asset_pointer": f"file-service://{file_id}",
-            })
-        parts.append(prompt)
-        content = {"content_type": "multimodal_text", "parts": parts}
+        content = {"content_type": "text", "parts": [prompt]}
         attachments = [
             {
                 "id": file_id,
+                "name": f"image_{i}.png",
+                "size": 0,
+                "mimeType": "image/png",
             }
-            for file_id in image_file_ids
+            for i, file_id in enumerate(image_file_ids)
         ]
-        print(f"[conversation] sending multimodal message with {len(image_file_ids)} image(s)")
+        print(f"[conversation] sending text message with {len(image_file_ids)} attachment(s)")
     else:
         content = {"content_type": "text", "parts": [prompt]}
         attachments = []
