@@ -263,8 +263,8 @@ def _send_conversation(
         parts: list = []
         for file_id in image_file_ids:
             parts.append({
+                "content_type": "image_asset_pointer",
                 "asset_pointer": f"file-service://{file_id}",
-                "size_bytes": 0,
             })
         parts.append(prompt)
         content = {"content_type": "multimodal_text", "parts": parts}
@@ -337,9 +337,13 @@ def _send_conversation(
     if not response.ok:
         error_body = ""
         try:
-            error_body = response.text[:1000]
+            # For streamed responses, read all content
+            error_body = response.text
+            if not error_body:
+                error_body = response.content.decode("utf-8", errors="replace") if response.content else ""
         except Exception:
             pass
+        error_body = error_body[:1000]
         print(f"[conversation] HTTP {response.status_code} error_body={error_body!r}")
         raise ImageGenerationError(error_body or f"conversation failed: {response.status_code}")
     return response
