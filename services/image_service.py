@@ -241,6 +241,7 @@ def _send_conversation(
     prompt: str,
     model: str,
     image_file_ids: Optional[list[str]] = None,
+    image_sizes: Optional[list[int]] = None,
 ):
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -258,19 +259,33 @@ def _send_conversation(
     if proof_token:
         headers["openai-sentinel-proof-token"] = proof_token
 
-    # Build message content — text only or with image attachments
+    # Build message content — text only or with image references
     if image_file_ids:
-        content = {"content_type": "text", "parts": [prompt]}
+        parts: list = []
+        for i, file_id in enumerate(image_file_ids):
+            parts.append({
+                "content_type": "image_asset_pointer",
+                "asset_pointer": f"sediment://{file_id}",
+                "size_bytes": image_sizes[i] if image_sizes else 0,
+                "width": 1024,
+                "height": 1024,
+            })
+        parts.append(prompt)
+        content = {"content_type": "multimodal_text", "parts": parts}
         attachments = [
             {
                 "id": file_id,
+                "size": image_sizes[i] if image_sizes else 0,
                 "name": f"image_{i}.png",
-                "size": 0,
-                "mimeType": "image/png",
+                "mime_type": "image/png",
+                "width": 1024,
+                "height": 1024,
+                "source": "local",
+                "is_big_paste": False,
             }
             for i, file_id in enumerate(image_file_ids)
         ]
-        print(f"[conversation] sending text message with {len(image_file_ids)} attachment(s)")
+        print(f"[conversation] sending multimodal message with {len(image_file_ids)} image(s)")
     else:
         content = {"content_type": "text", "parts": [prompt]}
         attachments = []
@@ -631,11 +646,14 @@ def generate_image_result(
 
             # Upload reference images if provided
             image_file_ids = None
+            image_sizes = None
             if images_data:
                 image_file_ids = []
+                image_sizes = []
                 for i, img_data in enumerate(images_data):
                     file_id = _upload_image(session, access_token, device_id, img_data, filename=f"image_{i}.png")
                     image_file_ids.append(file_id)
+                    image_sizes.append(len(img_data))
                 print(f"[image-upstream] uploaded {len(image_file_ids)} reference image(s)")
 
             parent_message_id = str(uuid.uuid4())
@@ -649,6 +667,7 @@ def generate_image_result(
                 prompt,
                 upstream_model,
                 image_file_ids=image_file_ids,
+                image_sizes=image_sizes,
             )
             parsed = _parse_sse(response)
             actual_conversation_id = parsed.get("conversation_id") or ""
