@@ -69,7 +69,8 @@ class BackendService:
                 print(f"[image-generate] cpa queued token={request_token[:12]}... conversation={exc.conversation_id[:16]}")
                 task = task_service.create_task(prompt, model)
                 task_service.update_task(task.id, conversation_id=exc.conversation_id, access_token=exc.access_token, device_id=exc.device_id)
-                task_service.submit_poll(task.id, lambda: poll_queued_image(exc.conversation_id, exc.access_token, exc.device_id, prompt))
+                _cid, _at, _did, _prompt = exc.conversation_id, exc.access_token, exc.device_id, prompt
+                task_service.submit_poll(task.id, lambda: poll_queued_image(_cid, _at, _did, _prompt))
                 return {"created": 0, "task_id": task.id, "status": "pending", "message": str(exc)}
             except ImageGenerationError as exc:
                 print(f"[image-generate] cpa fail token={request_token[:12]}... error={exc}")
@@ -105,7 +106,8 @@ class BackendService:
                 print(f"[image-generate] queued pooled token={request_token[:12]}... conversation={exc.conversation_id[:16]}")
                 task = task_service.create_task(prompt, model)
                 task_service.update_task(task.id, conversation_id=exc.conversation_id, access_token=exc.access_token, device_id=exc.device_id)
-                task_service.submit_poll(task.id, lambda: poll_queued_image(exc.conversation_id, exc.access_token, exc.device_id, prompt))
+                _cid, _at, _did, _prompt = exc.conversation_id, exc.access_token, exc.device_id, prompt
+                task_service.submit_poll(task.id, lambda: poll_queued_image(_cid, _at, _did, _prompt))
                 return {"created": 0, "task_id": task.id, "status": "pending", "message": str(exc)}
             except ImageGenerationError as exc:
                 account = self.account_service.mark_image_result(request_token, success=False)
