@@ -315,9 +315,13 @@ export default function ImagePage() {
     if (currentRefImages.length > 0) {
       for (const file of currentRefImages) {
         try {
-          const buffer = await file.arrayBuffer();
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-          refImageDataUrls.push(`data:${file.type || "image/png"};base64,${base64}`);
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          refImageDataUrls.push(dataUrl);
         } catch {
           // skip failed conversions
         }
@@ -665,6 +669,31 @@ export default function ImagePage() {
                       if (!isGenerating) {
                         void handleGenerateImage();
                       }
+                    }
+                  }}
+                  onPaste={(event) => {
+                    const items = event.clipboardData?.items;
+                    if (!items) return;
+                    const imageFiles: File[] = [];
+                    for (const item of Array.from(items)) {
+                      if (item.type.startsWith("image/")) {
+                        const file = item.getAsFile();
+                        if (file) imageFiles.push(file);
+                      }
+                    }
+                    if (imageFiles.length > 0) {
+                      event.preventDefault();
+                      handleFileSelect(new DataTransfer().files); // dummy, we handle manually
+                      const newPreviews: string[] = [];
+                      for (const file of imageFiles) {
+                        if (file.size > 20 * 1024 * 1024) {
+                          toast.error(`${file.name} 超过 20MB`);
+                          continue;
+                        }
+                        newPreviews.push(URL.createObjectURL(file));
+                      }
+                      setReferenceImages((prev) => [...prev, ...imageFiles]);
+                      setReferencePreviews((prev) => [...prev, ...newPreviews]);
                     }
                   }}
                   className={cn(
