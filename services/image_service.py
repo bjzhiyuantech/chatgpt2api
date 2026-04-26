@@ -681,7 +681,7 @@ def generate_image_result(
                     f"[image-upstream] no images in SSE stream, polling conversation={actual_conversation_id[:16]}..."
                     f" response_text={response_text[:100]!r}"
                 )
-                file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id, timeout=180)
+                file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id, timeout=60)
 
             if not file_ids:
                 # If we have a conversation_id, the image might still be generating — raise queued error
